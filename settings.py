@@ -42,6 +42,9 @@ DEFAULTS = {
     "inject_method": "type",
     "trailing_space": True,
     "capitalize_first": True,
+    # Keep the Parakeet window above every other window so its status stays
+    # visible while you dictate into another app. Toggle in the General tab.
+    "always_on_top": True,
     # When True, transcripts are printed to the console for troubleshooting.
     # Leave False in clinical use so PHI never lands in a captured log.
     "debug": False,

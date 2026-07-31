@@ -32,6 +32,7 @@ insertion, medical formatting, and templates — and ships as a single `.exe`.
 | **Medical formatting** — `one twenty over eighty` → `120/80`, `twenty five milligrams` → `25 mg` | ✅ |
 | **Continuous dictation** (checkbox in the General tab) — hold and talk for as long as you like; sentences insert as you pause (Silero VAD) | ✅ |
 | Filler-word cleanup (`strip from start`, `ignore if alone`) | ✅ |
+| **Always-on-top** window so status stays visible while you dictate (toggle in General) | ✅ |
 | Roaming settings — settings live in Documents, so they follow the user on any setup where the Documents folder is shared across machines (roaming profile / folder redirection) | ✅ |
 | Single-file Windows `.exe`, optional automated CI builds | ✅ |
 
@@ -70,13 +71,35 @@ unsigned, so Windows SmartScreen may warn on first launch — *More info → Run
 anyway*.)
 
 **Option B — build it yourself on Windows.** PyInstaller cannot cross-compile,
-so this must run on Windows:
+so this must run on Windows. On a clean machine, first download everything the
+build needs (Python 3.10+, the virtual env, pip dependencies, and a matched MSVC
+runtime), then build:
 
 ```bat
+powershell -ExecutionPolicy Bypass -File bootstrap.ps1
 build.bat
 ```
 
+`bootstrap.ps1` is idempotent — re-running it only fills in what's missing. Add
+`-PreloadModel` to also cache the ~670 MB model up front for offline first-run.
+If your machine already has Python and the deps, you can skip straight to
+`build.bat`.
+
 Output: `dist\ParakeetDictate.exe`.
+
+**Packaging a release.** `release.ps1` wraps the exe and its model into a
+versioned zip under `release\`:
+
+```bat
+powershell -ExecutionPolicy Bypass -File release.ps1 -Build
+```
+
+By default this produces a **zero-network** bundle
+(`ParakeetDictate-v<ver>-win64-offline.zip`) — the exe, both models (speech +
+VAD), a `run-ParakeetDictate.bat` launcher, and docs — so a clinical machine
+needs no internet at all. Pass `-NoModel` for a lean ~50 MB zip whose exe
+downloads the model on first run. `-Build` rebuilds the exe first; omit it to
+package the existing `dist\ParakeetDictate.exe`.
 
 ## Making it *fully* offline (no first-run download)
 

@@ -35,9 +35,23 @@ REM 2b) Sanity-check the pure-Python formatting/postprocess/VAD logic
 python test_formatting.py || goto :eof
 python test_vad.py || goto :eof
 
+REM 2c) Bundle a CONSISTENT MSVC runtime (vcruntime140/vcruntime140_1/msvcp140).
+REM    onnxruntime.dll links MSVCP140.dll + VCRUNTIME140.dll. PyInstaller auto-
+REM    bundles Python's vcruntime140.dll (often older) but NOT msvcp140.dll, so
+REM    at runtime msvcp140.dll loads from System32 (newer) against the older
+REM    bundled vcruntime -> "DLL initialization routine failed" when onnxruntime
+REM    imports. Shipping all three from System32 as one matched set fixes it.
+if exist _vcredist rmdir /s /q _vcredist
+mkdir _vcredist
+copy /y "%SystemRoot%\System32\vcruntime140.dll"   _vcredist\ >nul
+copy /y "%SystemRoot%\System32\vcruntime140_1.dll" _vcredist\ >nul
+copy /y "%SystemRoot%\System32\msvcp140.dll"        _vcredist\ >nul
+copy /y "%SystemRoot%\System32\concrt140.dll"       _vcredist\ >nul
+
 REM 3) Build. --collect-all pulls onnxruntime's native DLLs and onnx-asr's
 REM    bundled preprocessor/decoder assets, which PyInstaller misses otherwise.
 REM    --hidden-import vad ensures the lazily-imported VAD module is bundled.
+REM    --add-binary overrides PyInstaller's older vcruntime with the matched set.
 pyinstaller --onefile --windowed --name ParakeetDictate ^
   --icon parakeet.ico ^
   --version-file version.txt ^
@@ -46,6 +60,10 @@ pyinstaller --onefile --windowed --name ParakeetDictate ^
   --collect-all onnx_asr ^
   --collect-submodules sounddevice ^
   --hidden-import vad ^
+  --add-binary "_vcredist\vcruntime140.dll;." ^
+  --add-binary "_vcredist\vcruntime140_1.dll;." ^
+  --add-binary "_vcredist\msvcp140.dll;." ^
+  --add-binary "_vcredist\concrt140.dll;." ^
   parakeet_dictate.py
 
 echo.

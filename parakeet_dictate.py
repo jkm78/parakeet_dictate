@@ -21,6 +21,7 @@ from tkinter import ttk
 import settings as settings_mod
 import postprocess
 import mic_hid
+import winchrome
 
 # Heavy modules (numpy, sounddevice, keyboard, pyperclip, onnx_asr) are imported
 # lazily in _startup() so the loading window can appear instantly instead of
@@ -45,6 +46,7 @@ SETTINGS = settings_mod.load()
 model = None
 model_ready = threading.Event()
 model_error = threading.Event()   # set if model load fails (unblocks the window)
+root = None                       # the Tk root window (set in main)
 
 # Recent log lines for the loading window's debug panel, plus the log file path.
 # The windowed exe has no console, so all prints are teed here and to a file.
@@ -69,6 +71,39 @@ _mic_reader = None
 _stream = None
 status_var = None
 _active_input = ""             # human description of the input source in use
+_light_canvas = None           # status-indicator circle (set in build_main_view)
+_light_oval = None
+
+# Status-indicator colors: the circle reflects which phase the app is in.
+#   turquoise = listening (trigger held, capturing your voice)
+#   green     = dictating (transcribing / inserting the text)
+#   red       = off       (idle — waiting for the trigger)
+STATUS_COLORS = {
+    "listening": "#3498db",   # blue
+    "dictating": "#2ecc71",   # green
+    "off":       "#e74c3c",   # red
+}
+
+# Window body theme (a standard native window that follows Windows light/dark).
+_PAL = {}                      # active color palette (see _palette)
+
+
+def _palette(dark):
+    """Flat surface/text/border colors that follow the Windows light/dark theme
+    so the window body matches the native (themed) title bar."""
+    if dark:
+        return {
+            "body": "#1f1f1e", "text": "#ededea", "text2": "#a8a8a2",
+            "text3": "#8f8f88", "border": "#3a3a37",
+            "btn": "#2a2a28", "btn_border": "#46463f", "btn_hover": "#33332f",
+            "field": "#2a2a28", "sel": "#2f5f8f", "sel_fg": "#ffffff",
+        }
+    return {
+        "body": "#ffffff", "text": "#1a1a18", "text2": "#6b6b66",
+        "text3": "#6b6b66", "border": "#e2e2de",
+        "btn": "#ffffff", "btn_border": "#d7d7d2", "btn_hover": "#f2f2ef",
+        "field": "#ffffff", "sel": "#3d7fc2", "sel_fg": "#ffffff",
+    }
 
 # --- continuous dictation (VAD segmentation) ---
 _vadmod = None                 # lazily-imported vad module
@@ -637,10 +672,42 @@ def _set_status(msg):
             pass
 
 
+def _status_kind(msg):
+    """Map a status message to an indicator color key."""
+    m = (msg or "").lower()
+    if "listening" in m:
+        return "listening"
+    if "transcrib" in m:
+        return "dictating"
+    return "off"
+
+
+def _update_light(msg):
+    """Recolor the status circle. Called on the UI thread (via a poll loop) so
+    it never touches Tk from a worker thread."""
+    if _light_canvas is None or _light_oval is None:
+        return
+    try:
+        _light_canvas.itemconfig(_light_oval, fill=STATUS_COLORS[_status_kind(msg)])
+    except Exception:
+        pass
+
+
+def _apply_always_on_top():
+    """Pin (or unpin) the main window per the always_on_top setting."""
+    if root is None:
+        return
+    try:
+        root.attributes("-topmost", bool(SETTINGS.get("always_on_top", True)))
+    except Exception:
+        pass
+
+
 def on_settings_saved(new_data):
     global SETTINGS, _segmenter
     old_device = SETTINGS.get("audio_device")
     SETTINGS = new_data
+    _apply_always_on_top()  # honor an always-on-top toggle without a restart
     install_input()  # re-apply key / mode changes immediately
     if sd is not None and new_data.get("audio_device") != old_device:
         _start_stream()  # switch microphones without a restart
@@ -721,8 +788,99 @@ def _shutdown_stream():
         _stream = None
 
 
+def _setup_fonts():
+    """Use Segoe UI at standard Windows sizes for every default (named) font, so
+    ttk widgets, the loading view, and the Settings window all read at a normal
+    Windows size instead of the theme's smaller default."""
+    import tkinter.font as tkfont
+    for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
+                 "TkHeadingFont", "TkTooltipFont"):
+        try:
+            tkfont.nametofont(name).configure(family="Segoe UI", size=10)
+        except Exception:
+            pass
+    try:
+        tkfont.nametofont("TkFixedFont").configure(family="Consolas", size=9)
+    except Exception:
+        pass
+
+
+def _setup_theme_style(dark):
+    """Point ttk at the flat 'clam' theme and tint it with the palette so the
+    window body, loading view, and Settings window follow the light/dark theme
+    that the native title bar uses."""
+    p = _PAL
+    style = ttk.Style()
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure(".", background=p["body"], foreground=p["text"],
+                    fieldbackground=p["field"], bordercolor=p["border"],
+                    lightcolor=p["body"], darkcolor=p["body"],
+                    troughcolor=p["border"], focuscolor=p["body"],
+                    selectbackground=p["sel"], selectforeground=p["sel_fg"])
+    # Disabled widgets (e.g. the grayed-out mic hint in keyboard mode) must keep
+    # the dark background, only dimming their text.
+    style.map(".", background=[("disabled", p["body"])],
+              foreground=[("disabled", p["text3"])],
+              fieldbackground=[("disabled", p["body"])])
+    style.configure("TLabel", background=p["body"], foreground=p["text"])
+    style.map("TLabel", background=[("disabled", p["body"])],
+              foreground=[("disabled", p["text3"])])
+    style.configure("TFrame", background=p["body"])
+    style.configure("TSeparator", background=p["border"])
+
+    # Notebook: the selected tab must stay dark (clam's default is a light fill).
+    style.configure("TNotebook", background=p["body"], bordercolor=p["border"],
+                    borderwidth=0)
+    style.configure("TNotebook.Tab", background=p["btn"], foreground=p["text2"],
+                    bordercolor=p["border"], lightcolor=p["btn"], padding=[10, 4])
+    style.map("TNotebook.Tab",
+              background=[("selected", p["body"]), ("active", p["btn_hover"])],
+              foreground=[("selected", p["text"]), ("active", p["text"])],
+              lightcolor=[("selected", p["body"])])
+    style.configure("TProgressbar", troughcolor=p["border"],
+                    background=STATUS_COLORS["listening"], bordercolor=p["border"])
+    style.configure("TButton", background=p["btn"], bordercolor=p["btn_border"])
+    style.map("TButton", background=[("active", p["btn_hover"]),
+                                     ("pressed", p["btn_hover"])])
+
+    # Input fields (Settings window): give Entry/Combobox/Spinbox a themed field
+    # background so they don't render as white boxes in dark mode.
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        style.configure(w, fieldbackground=p["field"], foreground=p["text"],
+                        background=p["btn"], arrowcolor=p["text"],
+                        bordercolor=p["border"], insertcolor=p["text"],
+                        lightcolor=p["border"], darkcolor=p["border"],
+                        selectbackground=p["sel"], selectforeground=p["sel_fg"])
+        style.map(w,
+                  fieldbackground=[("readonly", p["field"]), ("disabled", p["body"])],
+                  foreground=[("disabled", p["text3"])],
+                  arrowcolor=[("disabled", p["text3"])],
+                  background=[("active", p["btn_hover"])])
+    style.configure("TCheckbutton", background=p["body"], foreground=p["text"],
+                    indicatorbackground=p["field"], indicatorforeground=p["text"])
+    style.configure("TRadiobutton", background=p["body"], foreground=p["text"],
+                    indicatorbackground=p["field"], indicatorforeground=p["text"])
+    for w in ("TCheckbutton", "TRadiobutton"):
+        style.map(w, background=[("active", p["body"])],
+                  indicatorbackground=[("selected", p["field"]),
+                                       ("active", p["btn_hover"])])
+
+    # The Combobox drop-down and the classic tk Listbox/Text widgets in Settings
+    # are Tk (not ttk) and read their colors from the option database.
+    if root is not None:
+        for cls in ("*TCombobox*Listbox", "*Listbox", "*Text"):
+            root.option_add(f"{cls}.background", p["field"])
+            root.option_add(f"{cls}.foreground", p["text"])
+            root.option_add(f"{cls}.selectBackground", p["sel"])
+            root.option_add(f"{cls}.selectForeground", p["sel_fg"])
+        root.option_add("*Text.insertBackground", p["text"])
+
+
 def main():
-    global status_var
+    global status_var, root, _PAL
     _setup_logging()   # capture everything before anything else prints
     # Redirect model caches to the shared machine-wide folder before anything
     # imports huggingface_hub or the VAD starts loading in the background.
@@ -730,13 +888,27 @@ def main():
     root = tk.Tk()
     root.title("Parakeet Dictate")
     root.geometry("560x420")
+    root.withdraw()              # stay hidden until the title bar is themed
+
+    dark = winchrome.is_dark_mode()
+    _PAL = _palette(dark)
+    _setup_fonts()               # standard Windows (Segoe UI) font sizes
+    _setup_theme_style(dark)
+    root.configure(bg=_PAL["body"])
+    root.update_idletasks()
+    winchrome.set_titlebar_theme(root, dark)   # dark/light native title bar
+    _apply_always_on_top()       # keep the window over the app you dictate into
+
+    body = tk.Frame(root, bg=_PAL["body"])
+    body.pack(fill="both", expand=True)
+    root.deiconify()             # show it now that the title bar is painted
 
     # --- loading view -----------------------------------------------------
-    loading = ttk.Frame(root)
+    loading = ttk.Frame(body)
     loading.pack(fill="both", expand=True)
     ttk.Label(loading, text="Loading Parakeet Dictate",
-              font=("Segoe UI", 12)).pack(pady=(18, 6))
-    load_msg = ttk.Label(loading, foreground="#555", text="Please stand by...")
+              font=("Segoe UI", 14)).pack(pady=(18, 6))
+    load_msg = ttk.Label(loading, foreground=_PAL["text2"], text="Please stand by...")
     load_msg.pack()
     bar = ttk.Progressbar(loading, mode="indeterminate", length=240)
     bar.pack(pady=12)
@@ -746,13 +918,13 @@ def main():
     # console (the windowed exe has none). Also written to the log file.
     logframe = ttk.Frame(loading)
     logframe.pack(fill="both", expand=True, padx=10, pady=(4, 8))
-    logbox = tk.Text(logframe, height=10, wrap="none", font=("Consolas", 8),
+    logbox = tk.Text(logframe, height=10, wrap="none", font=("Consolas", 9),
                      background="#111", foreground="#ddd", borderwidth=0)
     sb = ttk.Scrollbar(logframe, command=logbox.yview)
     logbox.configure(yscrollcommand=sb.set, state="disabled")
     sb.pack(side="right", fill="y")
     logbox.pack(side="left", fill="both", expand=True)
-    ttk.Label(loading, foreground="#888", font=("Segoe UI", 8),
+    ttk.Label(loading, foreground=_PAL["text3"], font=("Segoe UI", 9),
               text=f"Log: {_log_path}").pack(pady=(0, 6))
 
     status_var = tk.StringVar(value="Starting...")
@@ -790,7 +962,7 @@ def main():
         if model_ready.is_set():
             bar.stop()
             loading.destroy()
-            build_main_view(root)
+            build_main_view(body)
         elif model_error.is_set():
             # Don't hang: stop the spinner and leave the error + log on screen.
             bar.stop()
@@ -809,24 +981,60 @@ def main():
         _shutdown_stream()
 
 
-def build_main_view(root):
+def build_main_view(body):
     """Shown only after the model has finished loading."""
-    # Shrink back down from the tall loading window (which held the log panel)
-    # so the ready view isn't mostly blank space.
-    root.geometry("360x170")
-    frame = ttk.Frame(root)
+    global _light_canvas, _light_oval
+    p = _PAL
+    frame = tk.Frame(body, bg=p["body"])
     frame.pack(fill="both", expand=True)
 
-    ttk.Label(frame, textvariable=status_var,
-              font=("Segoe UI", 11)).pack(pady=(18, 4))
-    hint = ttk.Label(frame, foreground="#555", text="")
+    # Status row: a colored circle + the status text. The circle turns
+    # blue while listening, green while dictating, red when idle.
+    statusrow = tk.Frame(frame, bg=p["body"])
+    statusrow.pack(pady=(20, 4))
+    _light_canvas = tk.Canvas(statusrow, width=34, height=34, bg=p["body"],
+                              highlightthickness=0, bd=0, takefocus=0)
+    _light_oval = _light_canvas.create_oval(4, 4, 30, 30,
+                                            fill=STATUS_COLORS["off"], outline="")
+    _light_canvas.pack(side="left", padx=(0, 10))
+    tk.Label(statusrow, textvariable=status_var, bg=p["body"], fg=p["text"],
+             font=("Segoe UI", 15)).pack(side="left")
+
+    hint = tk.Label(frame, bg=p["body"], fg=p["text2"], text="",
+                    font=("Segoe UI", 10))
     hint.pack()
+
+    # Legend so the colors are self-explanatory (each bullet in its own color).
+    legend = tk.Frame(frame, bg=p["body"])
+    legend.pack(pady=(6, 0))
+    for key, label in (("listening", "listening"),
+                       ("dictating", "dictating"),
+                       ("off", "off")):
+        tk.Label(legend, text="●", fg=STATUS_COLORS[key], bg=p["body"],
+                 font=("Segoe UI", 12)).pack(side="left", padx=(8, 2))
+        tk.Label(legend, text=label, fg=p["text3"], bg=p["body"],
+                 font=("Segoe UI", 10)).pack(side="left")
 
     def open_settings():
         from settings_gui import SettingsWindow
         SettingsWindow(root, SETTINGS, on_settings_saved)
 
-    ttk.Button(frame, text="Edit Settings", command=open_settings).pack(pady=8)
+    btn = tk.Button(frame, text="Edit settings", command=open_settings,
+                    bg=p["btn"], fg=p["text"], activebackground=p["btn_hover"],
+                    activeforeground=p["text"], relief="flat", bd=0,
+                    highlightthickness=1, highlightbackground=p["btn_border"],
+                    highlightcolor=p["btn_border"], font=("Segoe UI", 10),
+                    padx=18, pady=6, cursor="hand2")
+    btn.pack(pady=16)
+    btn.bind("<Enter>", lambda e: btn.config(bg=p["btn_hover"]))
+    btn.bind("<Leave>", lambda e: btn.config(bg=p["btn"]))
+
+    # Size the window to fit its content exactly (no dead space), with a little
+    # breathing room on the sides.
+    root.update_idletasks()
+    w = max(300, frame.winfo_reqwidth() + 40)
+    h = frame.winfo_reqheight()
+    root.geometry(f"{w}x{h}")
 
     def refresh_hint():
         # Show what's ACTUALLY active (set by install_input), which reflects a
@@ -834,6 +1042,15 @@ def build_main_view(root):
         hint.config(text=_active_input or "starting...")
         root.after(1000, refresh_hint)
     refresh_hint()
+
+    def refresh_light():
+        # Poll the status on the UI thread and recolor the circle. Polling (vs.
+        # pushing from _set_status, which runs on worker threads) keeps every Tk
+        # call on the main thread.
+        _update_light(status_var.get())
+        root.after(150, refresh_light)
+    refresh_light()
+
     _set_status("Ready")
 
 

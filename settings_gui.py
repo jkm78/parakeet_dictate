@@ -15,16 +15,33 @@ from tkinter import ttk, messagebox
 import keyboard  # only used for the key-capture helper
 
 import settings as settings_mod
+import winchrome
+
+# Theme-aware colors. _BODY_BG must match the ttk "." background set in
+# parakeet_dictate so the Toplevel's own background doesn't show as a light
+# border in the padding around the notebook and button bar.
+_DARK = winchrome.is_dark_mode()
+_BODY_BG = "#1f1f1e" if _DARK else "#ffffff"
+_HINT_FG = "#8f8f88" if _DARK else "#555555"
 
 
 class SettingsWindow(tk.Toplevel):
     def __init__(self, master, data, on_save):
         super().__init__(master)
+        # Build everything while HIDDEN, then theme the title bar and show it
+        # last -- exactly like the main window. Deiconifying before the content
+        # exists leaves the native title bar painted in light mode.
+        self.withdraw()
+        self.configure(bg=_BODY_BG)   # else the Toplevel bg shows as a light border
         self.title("Parakeet Dictate - Settings")
         self.geometry("640x620")
         self.data = data
         self.on_save = on_save
         self._capture_hook = None
+        # The main window may be always-on-top; keep this dialog above it and
+        # focused so it's never hidden behind the pinned window.
+        self.transient(master)
+        self.attributes("-topmost", True)
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
@@ -45,6 +62,13 @@ class SettingsWindow(tk.Toplevel):
         bar.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(bar, text="Save", command=self._save).pack(side="right")
         ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right", padx=6)
+
+        # Theme the native title bar to the Windows dark/light setting, then show.
+        self.update_idletasks()
+        winchrome.set_titlebar_theme(self, winchrome.is_dark_mode())
+        self.deiconify()
+        self.lift()
+        self.after(0, self.focus_force)
 
     # ---- Input tab -------------------------------------------------------
     def _build_input_tab(self, nb):
@@ -111,12 +135,12 @@ class SettingsWindow(tk.Toplevel):
             btn = ttk.Button(cap, text=self._btn_labels[target],
                              command=lambda t=target: self._capture_button(t))
             btn.grid(row=r, column=0, sticky="w", pady=2)
-            lbl = ttk.Label(cap, foreground="#555", text=self._binding_text(target))
+            lbl = ttk.Label(cap, foreground=_HINT_FG, text=self._binding_text(target))
             lbl.grid(row=r, column=1, sticky="w", padx=12)
             self.capture_btns[target] = btn
             self.binding_lbls[target] = lbl
 
-        self.mic_hint = ttk.Label(f, wraplength=580, foreground="#555",
+        self.mic_hint = ttk.Label(f, wraplength=580, foreground=_HINT_FG,
                   text="Pick the device above, click a Capture button, then press "
                        "that button on the mic. Close Dragon first so the buttons "
                        "reach this app. (Tab buttons require the mic as trigger "
@@ -134,7 +158,7 @@ class SettingsWindow(tk.Toplevel):
         self.audio_combo.grid(row=9, column=1, columnspan=2, sticky="w")
         self._audio_names = []
         self._refresh_audio_devices()
-        ttk.Label(f, wraplength=580, foreground="#555",
+        ttk.Label(f, wraplength=580, foreground=_HINT_FG,
                   text="Which microphone is recorded. 'System default' follows "
                        "Windows' default input device.").grid(
             row=10, column=0, columnspan=3, sticky="w", pady=(2, 6))
@@ -293,6 +317,9 @@ class SettingsWindow(tk.Toplevel):
         self.capitalize_var = tk.BooleanVar(value=self.data.get("capitalize_first", True))
         ttk.Checkbutton(f, text="Capitalize the first letter of each insert",
                         variable=self.capitalize_var).pack(anchor="w", padx=8, pady=2)
+        self.on_top_var = tk.BooleanVar(value=self.data.get("always_on_top", True))
+        ttk.Checkbutton(f, text="Keep the Parakeet window on top of other windows",
+                        variable=self.on_top_var).pack(anchor="w", padx=8, pady=2)
         self.debug_var = tk.BooleanVar(value=self.data.get("debug", False))
         ttk.Checkbutton(f, text="Debug logging (prints transcripts to the "
                         "console — leave OFF in clinical use)",
@@ -314,7 +341,7 @@ class SettingsWindow(tk.Toplevel):
         ttk.Spinbox(prow, from_=150, to=2000, increment=50, width=6,
                     textvariable=self.cont_silence).pack(side="left", padx=6)
         ttk.Label(prow, text="(lower = each sentence inserts sooner)",
-                  foreground="#777").pack(side="left", padx=6)
+                  foreground=_HINT_FG).pack(side="left", padx=6)
 
     # ---- Substitutions tab ----------------------------------------------
     def _build_substitutions_tab(self, nb):
@@ -322,7 +349,7 @@ class SettingsWindow(tk.Toplevel):
         nb.add(f, text="Substitutions")
         self.subs = dict(self.data.get("substitutions", {}))
 
-        ttk.Label(f, wraplength=600, foreground="#555",
+        ttk.Label(f, wraplength=600, foreground=_HINT_FG,
                   text="Inline replacements applied anywhere in a sentence "
                        "(e.g. 'a fib' -> 'AFib', 'sob' -> 'shortness of "
                        "breath', 'prn' -> 'as needed').").pack(
@@ -391,7 +418,7 @@ class SettingsWindow(tk.Toplevel):
         f = ttk.Frame(nb)
         nb.add(f, text="Formatting")
         fmt = self.data.get("formatting", {})
-        ttk.Label(f, wraplength=580, foreground="#555",
+        ttk.Label(f, wraplength=580, foreground=_HINT_FG,
                   text="Local number/medical formatting. Each rule stays a "
                        "no-op unless it is confident, so it won't disturb "
                        "ordinary prose.").pack(anchor="w", padx=8, pady=(10, 6))
@@ -411,7 +438,7 @@ class SettingsWindow(tk.Toplevel):
     def _build_list_tab(self, nb, title, key, hint):
         f = ttk.Frame(nb)
         nb.add(f, text=title)
-        ttk.Label(f, text=hint, wraplength=580, foreground="#555").pack(
+        ttk.Label(f, text=hint, wraplength=580, foreground=_HINT_FG).pack(
             anchor="w", padx=6, pady=6)
         txt = tk.Text(f, height=18, wrap="none")
         txt.pack(fill="both", expand=True, padx=6, pady=6)
@@ -503,6 +530,7 @@ class SettingsWindow(tk.Toplevel):
         self.data["inject_method"] = self.inject_var.get()
         self.data["trailing_space"] = bool(self.trailing_var.get())
         self.data["capitalize_first"] = bool(self.capitalize_var.get())
+        self.data["always_on_top"] = bool(self.on_top_var.get())
         self.data["debug"] = bool(self.debug_var.get())
         self.data["substitutions"] = self.subs
         self.data["formatting"] = {
