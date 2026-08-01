@@ -16,16 +16,16 @@ private, offline dictation.
 | Package | Size | Best for |
 |---|---|---|
 | **ParakeetDictate-v1.0.0-win64.zip** | ~50 MB | Most users. Downloads the ~640 MB speech model from Hugging Face on first launch, then runs fully offline. |
-| **ParakeetDictate-v1.0.0-win64-offline.zip** | ~964 MB | Locked-down / air-gapped clinical machines. Bundles both models + a launcher; needs **zero network**, ever. |
 
 **SHA-256**
 ```
 ParakeetDictate-v1.0.0-win64.zip
   9DE96C889C0EA12E9BEF7A89E92C9E33434F164F03D9F8693026AD54C2F18D48
-
-ParakeetDictate-v1.0.0-win64-offline.zip
-  22AA18B5B85637E8BD88610E0297330A40152025C2239B4AB101DA3A75EEF28F
 ```
+
+> A fully **offline / zero-network** package (exe + both models bundled, ~964 MB)
+> is available by building it yourself — run `release.ps1` (see the repo). It is
+> not attached here because of its size.
 
 > Builds are unsigned, so Windows SmartScreen may warn on first launch —
 > **More info → Run anyway**.
