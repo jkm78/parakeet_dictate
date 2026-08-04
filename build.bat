@@ -54,6 +54,13 @@ copy /y "%SystemRoot%\System32\vcruntime140_1.dll" _vcredist\ >nul
 copy /y "%SystemRoot%\System32\msvcp140.dll"        _vcredist\ >nul
 copy /y "%SystemRoot%\System32\concrt140.dll"       _vcredist\ >nul
 
+REM 2d) Stage the Silero VAD model so it can be bundled into the exe. vad.py
+REM     checks <exe>\models\silero_vad.onnx first when frozen, so bundling it
+REM     makes BOTH continuous dictation and wake-word end-of-utterance work with
+REM     no first-run download. resolve_model() fetches it once if not cached.
+if not exist models mkdir models
+python -c "import os,shutil,vad; d=os.path.join('models','silero_vad.onnx'); (None if os.path.exists(d) else shutil.copy(vad.resolve_model(), d)); print('silero staged:', os.path.getsize(d), 'bytes')"
+
 REM 3) Build. --collect-all pulls onnxruntime's native DLLs and onnx-asr's
 REM    bundled preprocessor/decoder assets, which PyInstaller misses otherwise.
 REM    --hidden-import vad ensures the lazily-imported VAD module is bundled.
@@ -76,6 +83,7 @@ pyinstaller --onefile --windowed --name ParakeetDictate ^
   --exclude-module matplotlib ^
   --exclude-module torch ^
   --exclude-module pandas ^
+  --add-data "models\silero_vad.onnx;models" ^
   --add-binary "_vcredist\vcruntime140.dll;." ^
   --add-binary "_vcredist\vcruntime140_1.dll;." ^
   --add-binary "_vcredist\msvcp140.dll;." ^
