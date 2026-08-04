@@ -30,6 +30,12 @@ REM    both builds identical and reproducible. If Defender ever flags a build,
 REM    change this one version in build.bat AND .github/workflows/build-windows.yml.
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller==6.21.0
+REM Wake-word trigger dependency (openWakeWord). Bundled into the exe below.
+python -m pip install -r requirements-wake.txt
+
+REM 2a2) Pre-download openWakeWord's models into the package so PyInstaller can
+REM      bundle them (the exe then runs the wake word fully offline). ~18 MB.
+python -c "import openwakeword; openwakeword.utils.download_models()"
 
 REM 2b) Sanity-check the pure-Python formatting/postprocess/VAD logic
 python test_formatting.py || goto :eof
@@ -58,8 +64,18 @@ pyinstaller --onefile --windowed --name ParakeetDictate ^
   --collect-all onnxruntime ^
   --collect-all pywinusb ^
   --collect-all onnx_asr ^
+  --collect-all openwakeword ^
   --collect-submodules sounddevice ^
   --hidden-import vad ^
+  --hidden-import wakeword ^
+  --runtime-hook pyi_rth_oww_stubs.py ^
+  --exclude-module scipy ^
+  --exclude-module sklearn ^
+  --exclude-module tflite_runtime ^
+  --exclude-module speexdsp_ns ^
+  --exclude-module matplotlib ^
+  --exclude-module torch ^
+  --exclude-module pandas ^
   --add-binary "_vcredist\vcruntime140.dll;." ^
   --add-binary "_vcredist\vcruntime140_1.dll;." ^
   --add-binary "_vcredist\msvcp140.dll;." ^

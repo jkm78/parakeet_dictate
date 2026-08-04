@@ -13,6 +13,7 @@ actually spoken after the wake word.
 """
 
 import queue
+import sys
 import threading
 
 import numpy as np
@@ -90,10 +91,13 @@ class WakeWordEngine:
     def _load(self):
         import openwakeword
         from openwakeword.model import Model
-        try:
-            openwakeword.utils.download_models([self.model_name])  # no-op if cached
-        except Exception:
-            pass
+        # The frozen exe ships the models (see build.bat); only fetch from the
+        # network when running from source.
+        if not getattr(sys, "frozen", False):
+            try:
+                openwakeword.utils.download_models([self.model_name])  # no-op if cached
+            except Exception:
+                pass
         self._oww = Model(wakeword_models=[self.model_name],
                           inference_framework="onnx")
         keys = list(self._oww.models.keys())
