@@ -16,6 +16,7 @@ import keyboard  # only used for the key-capture helper
 
 import settings as settings_mod
 import winchrome
+import wakeword
 
 # Theme-aware colors. _BODY_BG must match the ttk "." background set in
 # parakeet_dictate so the Toplevel's own background doesn't show as a light
@@ -81,10 +82,14 @@ class SettingsWindow(tk.Toplevel):
 
         self.mode_var = tk.StringVar(value=inp.get("mode", "hotkey"))
         ttk.Label(f, text="Trigger source:").grid(row=0, column=0, sticky="w", pady=6)
-        ttk.Radiobutton(f, text="Keyboard hotkey", variable=self.mode_var,
-                        value="hotkey").grid(row=0, column=1, sticky="w")
-        ttk.Radiobutton(f, text="Mic / HID button", variable=self.mode_var,
-                        value="mic_button").grid(row=0, column=2, sticky="w")
+        srcf = ttk.Frame(f)
+        srcf.grid(row=0, column=1, columnspan=2, sticky="w")
+        ttk.Radiobutton(srcf, text="Keyboard hotkey", variable=self.mode_var,
+                        value="hotkey").pack(side="left")
+        ttk.Radiobutton(srcf, text="Mic / HID button", variable=self.mode_var,
+                        value="mic_button").pack(side="left", padx=(12, 0))
+        ttk.Radiobutton(srcf, text="Wake word", variable=self.mode_var,
+                        value="wake_word").pack(side="left", padx=(12, 0))
 
         self.behavior_var = tk.StringVar(value=inp.get("hold_or_toggle", "hold"))
         ttk.Label(f, text="Behavior:").grid(row=1, column=0, sticky="w", pady=6)
@@ -147,6 +152,32 @@ class SettingsWindow(tk.Toplevel):
                        "source; they share this device.)")
         self.mic_hint.grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
 
+        # Wake-word settings (used only when Trigger source = Wake word).
+        wcfg = self.data.get("wake", {})
+        self._wake_labels = dict(wakeword.PRESET_PHRASES)   # label -> model name
+        self._wake_by_model = {m: lbl for lbl, m in self._wake_labels.items()}
+        wrow = ttk.Frame(f)
+        wrow.grid(row=7, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Label(wrow, text="Wake phrase:").pack(side="left")
+        self.wake_phrase = tk.StringVar(
+            value=self._wake_by_model.get(wcfg.get("model", "hey_jarvis"), "Hey Jarvis"))
+        self.wake_combo = ttk.Combobox(wrow, textvariable=self.wake_phrase, width=16,
+                                       state="readonly",
+                                       values=list(self._wake_labels.keys()))
+        self.wake_combo.pack(side="left", padx=6)
+        ttk.Label(wrow, text="Sensitivity:").pack(side="left", padx=(12, 0))
+        self.wake_thresh = tk.DoubleVar(value=float(wcfg.get("threshold", 0.5)))
+        self.wake_thresh_spin = ttk.Spinbox(wrow, from_=0.10, to=0.90, increment=0.05,
+                                            width=6, textvariable=self.wake_thresh)
+        self.wake_thresh_spin.pack(side="left", padx=6)
+        ttk.Label(wrow, text="(lower = easier to trigger)",
+                  foreground=_HINT_FG).pack(side="left", padx=6)
+        if not wakeword.available():
+            ttk.Label(f, foreground=_HINT_FG,
+                      text="Wake word needs the 'openwakeword' package "
+                           "(pip install openwakeword).").grid(
+                row=7, column=0, columnspan=3, sticky="w", pady=(30, 0))
+
         ttk.Separator(f, orient="horizontal").grid(
             row=8, column=0, columnspan=3, sticky="ew", pady=10)
 
@@ -170,18 +201,21 @@ class SettingsWindow(tk.Toplevel):
         self._sync_input_mode()
 
     def _sync_input_mode(self, *_):
-        """Enable only the trigger source that's selected; gray out the other.
-        The audio-capture mic stays enabled in both modes."""
-        keyboard_mode = self.mode_var.get() == "hotkey"
-        kb_state = "normal" if keyboard_mode else "disabled"
-        mic_state = "disabled" if keyboard_mode else "normal"
+        """Enable only the controls for the selected trigger source; gray out the
+        rest. The audio-capture mic stays enabled in every mode."""
+        mode = self.mode_var.get()
+        kb_state = "normal" if mode == "hotkey" else "disabled"
+        mic_state = "normal" if mode == "mic_button" else "disabled"
+        wake_state = "normal" if mode == "wake_word" else "disabled"
         for w in (self.key_label, self.key_entry, self.capture_btn):
             w.config(state=kb_state)
         for w in (self.device_label, self.refresh_btn, self.mic_hint,
                   *self.capture_btns.values(), *self.binding_lbls.values()):
             w.config(state=mic_state)
-        # Combobox uses "readonly" (not "normal") for its enabled-but-locked look.
-        self.device_combo.config(state="disabled" if keyboard_mode else "readonly")
+        # Comboboxes use "readonly" (not "normal") for their enabled-but-locked look.
+        self.device_combo.config(state="readonly" if mode == "mic_button" else "disabled")
+        self.wake_combo.config(state="readonly" if mode == "wake_word" else "disabled")
+        self.wake_thresh_spin.config(state=wake_state)
 
     _AUDIO_DEFAULT = "System default"
 
@@ -320,6 +354,10 @@ class SettingsWindow(tk.Toplevel):
         self.on_top_var = tk.BooleanVar(value=self.data.get("always_on_top", True))
         ttk.Checkbutton(f, text="Keep the Parakeet window on top of other windows",
                         variable=self.on_top_var).pack(anchor="w", padx=8, pady=2)
+        self.cue_var = tk.BooleanVar(value=self.data.get("cue_sound", True))
+        ttk.Checkbutton(f, text="Play a sound when dictation starts/stops "
+                        "(e.g. after the wake word)",
+                        variable=self.cue_var).pack(anchor="w", padx=8, pady=2)
         self.debug_var = tk.BooleanVar(value=self.data.get("debug", False))
         ttk.Checkbutton(f, text="Debug logging (prints transcripts to the "
                         "console — leave OFF in clinical use)",
@@ -531,6 +569,14 @@ class SettingsWindow(tk.Toplevel):
         self.data["trailing_space"] = bool(self.trailing_var.get())
         self.data["capitalize_first"] = bool(self.capitalize_var.get())
         self.data["always_on_top"] = bool(self.on_top_var.get())
+        self.data["cue_sound"] = bool(self.cue_var.get())
+        wake = self.data.setdefault("wake", {})
+        wake["model"] = self._wake_labels.get(self.wake_phrase.get(), "hey_jarvis")
+        try:
+            wake["threshold"] = round(float(self.wake_thresh.get()), 3)
+        except (TypeError, ValueError):
+            wake["threshold"] = 0.5
+        wake.setdefault("end_silence_ms", 1500)
         self.data["debug"] = bool(self.debug_var.get())
         self.data["substitutions"] = self.subs
         self.data["formatting"] = {

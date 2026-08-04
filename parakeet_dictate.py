@@ -22,6 +22,7 @@ import settings as settings_mod
 import postprocess
 import mic_hid
 import winchrome
+import wakeword
 
 # Heavy modules (numpy, sounddevice, keyboard, pyperclip, onnx_asr) are imported
 # lazily in _startup() so the loading window can appear instantly instead of
@@ -68,6 +69,8 @@ _ring_samples = 0
 _key_is_down = False
 _input_hook = None
 _mic_reader = None
+_wake_engine = None            # WakeWordEngine when the wake-word trigger is active
+_wake_cfg = None               # (model, threshold, end_silence_ms) it was built with
 _stream = None
 status_var = None
 _active_input = ""             # human description of the input source in use
@@ -186,6 +189,11 @@ def _audio_cb(indata, frames_count, time_info, status):
     # PortAudio reports 'input overflow' while warming up at startup; it is
     # benign, so we don't surface it to the user.
     chunk = indata.copy()
+    # Wake-word listener (if active) sees every frame, for both detection and
+    # end-of-utterance, so feed it before the continuous early-return below.
+    we = _wake_engine
+    if we is not None:
+        we.feed(chunk)
     # Continuous mode: hand audio straight to the segmenter thread and keep the
     # PortAudio callback featherweight (no heavy work under the lock).
     if _continuous and _recording:
@@ -221,12 +229,14 @@ def _recognize_and_inject(audio, mid_sentence=False):
         inject(text)
 
 
-def start_recording():
+def start_recording(continuous=None, preroll=True):
     global _recording, _capture, _continuous, _ring_samples
     if not model_ready.is_set():
         return
-    use_continuous = bool(SETTINGS.get("continuous", {}).get("enabled")) and \
-        _segmenter is not None
+    # `continuous` overrides the setting (the wake-word path forces single-clip).
+    want_continuous = bool(SETTINGS.get("continuous", {}).get("enabled")) \
+        if continuous is None else bool(continuous)
+    use_continuous = want_continuous and _segmenter is not None
     with _lock:
         if _recording:
             return
@@ -242,7 +252,12 @@ def start_recording():
             _ring.clear()
             _ring_samples = 0
         else:
-            _capture = list(_ring)
+            # Wake-word capture skips the pre-roll so the wake phrase's own tail
+            # doesn't bleed into the transcript.
+            _capture = list(_ring) if preroll else []
+            if not preroll:
+                _ring.clear()
+                _ring_samples = 0
         _recording = True
     _set_status("Listening...")
 
@@ -465,6 +480,74 @@ def _trigger_release():
         stop_and_transcribe()
 
 
+# ---------------------------------------------------------------------------
+# Wake-word trigger (opt-in)
+# ---------------------------------------------------------------------------
+def _play_cue(kind):
+    """Play a short Windows speech cue ('start'/'stop') if enabled. Async and
+    best-effort so it never blocks or errors the dictation path."""
+    if not SETTINGS.get("cue_sound", True) or not sys.platform.startswith("win"):
+        return
+    wav = {"start": r"C:\Windows\Media\Speech On.wav",
+           "stop": r"C:\Windows\Media\Speech Off.wav"}.get(kind)
+    if not wav or not os.path.exists(wav):
+        return
+    try:
+        import winsound
+        winsound.PlaySound(wav, winsound.SND_FILENAME | winsound.SND_ASYNC
+                           | winsound.SND_NODEFAULT)
+    except Exception:
+        pass
+
+
+def _on_wake():
+    """Wake phrase heard: chime and start capturing (single clip, VAD ends it)."""
+    _play_cue("start")
+    start_recording(continuous=False, preroll=False)
+
+
+def _on_wake_end():
+    """End of the post-wake utterance: transcribe, chime, resume listening. Runs
+    the (blocking) transcription off the wake worker thread."""
+    def finish():
+        stop_and_transcribe()      # non-continuous: recognizes the captured clip
+        _play_cue("stop")
+        _set_status("Say the wake word...")
+    threading.Thread(target=finish, daemon=True).start()
+
+
+def _stop_wake_engine():
+    global _wake_engine, _wake_cfg
+    if _wake_engine is not None:
+        try:
+            _wake_engine.stop()
+        except Exception:
+            pass
+    _wake_engine = None
+    _wake_cfg = None
+
+
+def _ensure_wake_engine():
+    """(Re)build the wake engine to match the current settings. Cheap no-op if it
+    already matches. Model loads in the engine's own background thread."""
+    global _wake_engine, _wake_cfg
+    if not wakeword.available():
+        _log("wake: openwakeword not installed; wake-word trigger unavailable")
+        return False
+    w = SETTINGS.get("wake", {})
+    cfg = (w.get("model", "hey_jarvis"), float(w.get("threshold", 0.5)),
+           int(w.get("end_silence_ms", 1500)))
+    if _wake_engine is not None and _wake_cfg == cfg:
+        return True
+    _stop_wake_engine()
+    _wake_engine = wakeword.WakeWordEngine(
+        on_wake=_on_wake, on_end=_on_wake_end,
+        model=cfg[0], threshold=cfg[1], end_silence_ms=cfg[2], log=_log)
+    _wake_cfg = cfg
+    _wake_engine.start()
+    return True
+
+
 def install_input():
     global _input_hook, _mic_reader, _key_is_down, _active_input
     # tear down any existing sources
@@ -485,6 +568,19 @@ def install_input():
     inp = SETTINGS["input"]
     mode = inp.get("mode", "hotkey")
     behavior = inp.get("hold_or_toggle", "hold")
+
+    # Wake-word mode has no key/button hook: the always-on listener is the
+    # trigger. Build/keep it and stop here; other modes tear it down.
+    if mode == "wake_word":
+        if _ensure_wake_engine():
+            phrase = SETTINGS.get("wake", {}).get("model", "hey_jarvis")
+            _active_input = f"wake word: {phrase}"
+            _set_status("Say the wake word...")
+        else:
+            _active_input = "wake word unavailable (openwakeword not installed)"
+        return
+    _stop_wake_engine()
+
     mic_wanted = mode == "mic_button" and inp.get("mic")
 
     if mic_wanted:

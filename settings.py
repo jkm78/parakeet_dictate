@@ -22,7 +22,7 @@ DEFAULT_MACRO = (
 
 DEFAULTS = {
     "input": {
-        "mode": "hotkey",          # "hotkey" or "mic_button"
+        "mode": "hotkey",          # "hotkey", "mic_button", or "wake_word"
         "hold_or_toggle": "hold",  # "hold" = push-to-talk, "toggle" = press on/off
         "hotkey": "right ctrl",    # key name (keyboard library naming)
         "mic": None,               # Dictate button: {vid, pid, product, byte_index, match, mask/value}
@@ -31,6 +31,16 @@ DEFAULTS = {
         "mic_tab_forward": None,
         "mic_tab_backward": None,
     },
+    # Wake-word trigger (opt-in, prototype). Say the phrase, then dictate; it
+    # stops on a pause. Uses openWakeWord (local, CPU, ONNX).
+    "wake": {
+        "model": "hey_jarvis",     # pretrained openWakeWord phrase name
+        "threshold": 0.5,          # 0..1 detection sensitivity (higher = stricter)
+        "end_silence_ms": 1500,    # pause length that ends the dictation
+    },
+    # Play a short Windows speech cue when dictation starts/stops (e.g. after the
+    # wake word) so you know it's listening.
+    "cue_sound": True,
     # Audio capture device. None = system default input. Otherwise the
     # sounddevice device name (a stable string that survives index reshuffles).
     "audio_device": None,
@@ -120,7 +130,7 @@ def settings_path():
 
 # Nested dicts that should be key-merged with defaults (so flags added in a
 # later version still get a value) rather than wholesale-replaced by old files.
-_MERGE_KEYS = ("input", "formatting", "continuous")
+_MERGE_KEYS = ("input", "formatting", "continuous", "wake")
 
 
 def _merge_defaults(data):

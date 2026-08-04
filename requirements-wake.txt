@@ -1,0 +1,7 @@
+# Optional dependency for the Wake-word trigger source (prototype).
+# openWakeWord is a local, CPU, ONNX keyword spotter. Install it to enable the
+# "Wake word" option in the Input tab:
+#     pip install -r requirements-wake.txt
+# On first use it downloads a few small models (~a few MB) to its package cache.
+# The base app runs fine without this; wake mode just reports "unavailable".
+openwakeword>=0.6.0
