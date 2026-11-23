@@ -127,12 +127,18 @@ Privacy & Security*:
 
 The default hotkey on macOS is **right Option** (MacBooks have no right Ctrl);
 change it under *Edit settings → Input*. Paste mode uses Cmd+V. Logs go to
-`~/Library/Logs/ParakeetDictate/`.
+`~/Library/Logs/ParakeetDictate/`. If a permission is missing, the main window
+says so in red (click it to open the right Settings pane) — without Input
+Monitoring the hotkey only works while Parakeet's own window is focused.
 
-> The app is ad-hoc signed, not notarized. On another Mac, right-click →
-> **Open** the first time. Each rebuild has a new signature, so macOS may ask
-> for Input Monitoring / Accessibility again — remove the old entry and re-add
-> the app if the toggle looks on but the hotkey does nothing.
+**Signing.** `build_mac.sh` signs with a self-signed certificate that
+[`mac_signing.sh`](mac_signing.sh) creates once in its own keychain under
+`~/Library/Application Support/ParakeetDictate/signing` (your login keychain is
+untouched). Because the signature stays the same, permissions you grant
+**survive rebuilds**. The app is not notarized: on another Mac, right-click →
+**Open** the first time. If permissions ever look on but don't work (e.g. after
+switching from an older ad-hoc build), remove Parakeet Dictate from the list,
+re-add it, and relaunch.
 
 ## Making it *fully* offline (no first-run download)
 

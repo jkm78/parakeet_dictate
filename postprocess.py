@@ -25,6 +25,12 @@ def _norm(s):
     return re.sub(r"\s+", " ", s.strip().lower()).strip(_PUNCT)
 
 
+def _compact(s):
+    """Lowercase letters/digits only: 'Adult patient check-out.' ->
+    'adultpatientcheckout'. Used to match macro triggers loosely."""
+    return re.sub(r"[\W_]+", "", s.lower())
+
+
 def _apply_substitutions(text, subs):
     """Whole-word/phrase replacement anywhere in the text, case-insensitive.
     Longer triggers are applied first so 'blood pressure' wins over 'pressure'.
@@ -65,11 +71,15 @@ def apply(text, settings, mid_sentence=False):
     if _norm(cleaned) in ignore_set:
         return None
 
-    # 3. macro expansion (exact normalized match) -> returned verbatim
+    # 3. macro expansion (whole-utterance match) -> returned verbatim.
+    #    Compared with spaces/hyphens/punctuation removed, because the
+    #    recognizer is inconsistent about compounds: a "checkout" trigger must
+    #    still fire when it hears "Check out." or "check-out".
     macros = settings.get("macros", {})
-    norm_macros = {_norm(k): v for k, v in macros.items()}
-    if _norm(cleaned) in norm_macros:
-        return norm_macros[_norm(cleaned)]
+    compact_macros = {_compact(k): v for k, v in macros.items() if _compact(k)}
+    hit = compact_macros.get(_compact(cleaned))
+    if hit is not None:
+        return hit
 
     # 4. inline substitutions, then medical/numeric formatting
     cleaned = _apply_substitutions(cleaned, settings.get("substitutions", {}))

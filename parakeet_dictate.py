@@ -1019,8 +1019,28 @@ def build_main_view(body):
              font=winchrome.ui_font(15)).pack(side="left")
 
     hint = tk.Label(frame, bg=p["body"], fg=p["text2"], text="",
-                    font=winchrome.ui_font(10))
+                    font=winchrome.ui_font(10), wraplength=340)
     hint.pack()
+
+    # macOS: without Input Monitoring the hotkey only works while this window
+    # is focused, and without Accessibility the text can't be typed anywhere,
+    # yet nothing errors. Say so plainly (shown only while something's missing;
+    # clicking it opens the right System Settings pane).
+    perm_warn = tk.Label(frame, bg=p["body"], fg=STATUS_COLORS["off"],
+                         font=winchrome.ui_font(10), wraplength=340,
+                         justify="center", cursor="hand2")
+    perm_missing = [None]
+
+    def open_privacy_settings(_e=None):
+        pane = ("Privacy_ListenEvent" if "Input Monitoring" in (perm_missing[0] or [])
+                else "Privacy_Accessibility")
+        try:
+            import subprocess
+            subprocess.Popen(["open", "x-apple.systempreferences:"
+                              f"com.apple.preference.security?{pane}"])
+        except Exception:
+            pass
+    perm_warn.bind("<Button-1>", open_privacy_settings)
 
     # Legend so the colors are self-explanatory (each bullet in its own color).
     legend = tk.Frame(frame, bg=p["body"])
@@ -1049,15 +1069,43 @@ def build_main_view(body):
 
     # Size the window to fit its content exactly (no dead space), with a little
     # breathing room on the sides.
-    root.update_idletasks()
-    w = max(300, frame.winfo_reqwidth() + 40)
-    h = frame.winfo_reqheight()
-    root.geometry(f"{w}x{h}")
+    def fit_window():
+        root.update_idletasks()
+        w = max(300, frame.winfo_reqwidth() + 40)
+        h = frame.winfo_reqheight()
+        root.geometry(f"{w}x{h}")
+    fit_window()
+
+    def refresh_perms():
+        if sys.platform != "darwin" or keyboard is None:
+            return
+        try:
+            missing = keyboard.permission_problems()
+        except Exception:
+            return
+        if missing == perm_missing[0]:
+            return
+        perm_missing[0] = missing
+        if missing:
+            perm_warn.config(text=(
+                "\u26a0 Needs " + " + ".join(missing) + " permission \u2014 "
+                "the hotkey won't work in other apps. Add Parakeet Dictate in "
+                "System Settings \u203a Privacy & Security (click here), "
+                "then relaunch."))
+            perm_warn.pack(after=hint, pady=(4, 0))
+        else:
+            perm_warn.pack_forget()
+        fit_window()
+
+    tick = [0]
 
     def refresh_hint():
         # Show what's ACTUALLY active (set by install_input), which reflects a
         # keyboard fallback when the configured mic isn't plugged in.
         hint.config(text=_active_input or "starting...")
+        if tick[0] % 3 == 0:
+            refresh_perms()
+        tick[0] += 1
         root.after(1000, refresh_hint)
     refresh_hint()
 

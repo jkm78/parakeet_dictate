@@ -58,6 +58,9 @@ def run():
          "Start hydrochlorothiazide 25 mg twice daily"),
         ("thanks", None),
         ("adult checkout", "FULL TEMPLATE TEXT"),
+        ("Adult check out.", "FULL TEMPLATE TEXT"),      # split compound
+        ("okay, Adult check-out!", "FULL TEMPLATE TEXT"), # hyphen + filler
+        ("adult checkout today", "Adult checkout today"),  # not whole utterance
         ("blood pressure one twenty over eighty", "Blood pressure 120/80"),
     ]
     for src, want in cases:

@@ -70,8 +70,8 @@ rm -rf build "dist/$APP" "dist/$APP.app" "$APP.spec"
   parakeet_dictate.py
 
 # 4) Info.plist: the microphone prompt text (without it macOS silently feeds
-#    the app silence), version, and dark-mode support. Then re-sign ad hoc,
-#    since editing the plist invalidates PyInstaller's signature.
+#    the app silence), version, and dark-mode support. Then re-sign, since
+#    editing the plist invalidates PyInstaller's signature.
 PLIST="dist/$APP.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Parakeet Dictate records your voice while the dictation key is held and transcribes it on this Mac. Audio never leaves the computer.'" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
@@ -79,8 +79,18 @@ PLIST="dist/$APP.app/Contents/Info.plist"
   || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :NSRequiresAquaSystemAppearance bool false" "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 11.0" "$PLIST" 2>/dev/null || true
-codesign --force --deep --sign - "dist/$APP.app"
-codesign --verify --deep "dist/$APP.app"
+
+# 4b) Sign with a stable local certificate (see mac_signing.sh) so macOS keeps
+#     the Input Monitoring / Accessibility grants across rebuilds. Falls back
+#     to ad-hoc signing (grants then reset on every rebuild) if that fails.
+#     Set ADHOC=1 to skip it.
+if [ "${ADHOC:-0}" != "1" ] && ./mac_signing.sh "dist/$APP.app"; then
+  :
+else
+  echo "[sign] using ad-hoc signature (permissions reset on each rebuild)"
+  codesign --force --deep --sign - "dist/$APP.app"
+  codesign --verify --deep "dist/$APP.app"
+fi
 
 # 5) Zip for distribution (ditto keeps the bundle's symlinks/xattrs intact).
 ZIP="dist/$APP-v$VERSION-mac-$ARCH.zip"
@@ -95,7 +105,7 @@ cat <<EOF
  First launch downloads the model (~640 MB) once, then it
  runs fully offline. macOS will ask for Microphone, Input
  Monitoring and Accessibility permission on first run.
- The build is ad-hoc signed (not notarized): on another Mac,
+ Not notarized (local signature only): on another Mac,
  right-click the app > Open the first time.
 ============================================================
 EOF
