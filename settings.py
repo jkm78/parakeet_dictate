@@ -24,7 +24,9 @@ DEFAULTS = {
     "input": {
         "mode": "hotkey",          # "hotkey" or "mic_button"
         "hold_or_toggle": "hold",  # "hold" = push-to-talk, "toggle" = press on/off
-        "hotkey": "right ctrl",    # key name (keyboard library naming)
+        # key name (keyboard library naming). MacBooks have no right Ctrl, so
+        # macOS defaults to right Option.
+        "hotkey": "right option" if sys.platform == "darwin" else "right ctrl",
         "mic": None,               # Dictate button: {vid, pid, product, byte_index, match, mask/value}
         # Extra PowerMic buttons -> keystrokes, same binding shape as "mic".
         # Fire a Tab / Shift+Tab on press so field-to-field nav works from the mic.

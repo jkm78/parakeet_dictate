@@ -12,7 +12,7 @@ Sections:
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-import keyboard  # only used for the key-capture helper
+import keys as keyboard  # only used for the key-capture helper
 
 import settings as settings_mod
 import winchrome
@@ -99,7 +99,7 @@ class SettingsWindow(tk.Toplevel):
         # keyboard key
         self.key_label = ttk.Label(f, text="Keyboard key:")
         self.key_label.grid(row=3, column=0, sticky="w", pady=4)
-        self.key_var = tk.StringVar(value=inp.get("hotkey", "right ctrl"))
+        self.key_var = tk.StringVar(value=inp.get("hotkey", keyboard.DEFAULT_HOTKEY))
         self.key_entry = ttk.Entry(f, textvariable=self.key_var, width=20)
         self.key_entry.grid(row=3, column=1, sticky="w")
         self.capture_btn = ttk.Button(f, text="Capture key...", command=self._capture_key)
@@ -160,7 +160,7 @@ class SettingsWindow(tk.Toplevel):
         self._refresh_audio_devices()
         ttk.Label(f, wraplength=580, foreground=_HINT_FG,
                   text="Which microphone is recorded. 'System default' follows "
-                       "Windows' default input device.").grid(
+                       "the system's default input device.").grid(
             row=10, column=0, columnspan=3, sticky="w", pady=(2, 6))
 
         # Gray out whichever trigger's controls aren't in use, and keep it in
@@ -284,7 +284,11 @@ class SettingsWindow(tk.Toplevel):
                 self.key_var.set(event.name)
                 self.after(0, self._cleanup_capture)
                 self.after(0, lambda: self.capture_btn.config(text="Capture key..."))
-        self._capture_hook = keyboard.hook(on_key)
+        try:
+            self._capture_hook = keyboard.hook(on_key)
+        except Exception as e:   # macOS without Input Monitoring permission
+            self.capture_btn.config(text="Capture key...")
+            messagebox.showerror("Capture", str(e), parent=self)
 
     def _cleanup_capture(self):
         if self._capture_hook is not None:
@@ -300,7 +304,7 @@ class SettingsWindow(tk.Toplevel):
         nb.add(f, text="General")
 
         ttk.Label(f, text="How text is inserted at the cursor:",
-                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=8, pady=(10, 2))
+                  font=winchrome.ui_font(10, "bold")).pack(anchor="w", padx=8, pady=(10, 2))
         self.inject_var = tk.StringVar(value=self.data.get("inject_method", "type"))
         ttk.Radiobutton(f, text="Type  -  simulate keystrokes; nothing ever "
                         "touches the clipboard (best for PHI, default)",
@@ -329,7 +333,7 @@ class SettingsWindow(tk.Toplevel):
 
         cont = self.data.get("continuous", {})
         ttk.Label(f, text="Continuous dictation (beta):",
-                  font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=8, pady=(0, 2))
+                  font=winchrome.ui_font(10, "bold")).pack(anchor="w", padx=8, pady=(0, 2))
         self.cont_enabled = tk.BooleanVar(value=cont.get("enabled", False))
         ttk.Checkbutton(f, text="Insert sentences as I pause (removes the ~30 s "
                         "length limit; downloads a ~2 MB model once)",
@@ -521,7 +525,7 @@ class SettingsWindow(tk.Toplevel):
             self._subs_update()
         self.data["input"]["mode"] = self.mode_var.get()
         self.data["input"]["hold_or_toggle"] = self.behavior_var.get()
-        self.data["input"]["hotkey"] = self.key_var.get().strip() or "right ctrl"
+        self.data["input"]["hotkey"] = self.key_var.get().strip() or keyboard.DEFAULT_HOTKEY
         self.data["input"]["mic"] = self.mic_binding
         self.data["input"]["mic_tab_forward"] = self.tab_fwd_binding
         self.data["input"]["mic_tab_backward"] = self.tab_back_binding

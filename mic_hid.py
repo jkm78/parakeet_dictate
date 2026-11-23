@@ -1,5 +1,6 @@
 """
-Generic HID button support (Windows) for Parakeet Dictate.
+Generic HID button support for Parakeet Dictate (Windows via pywinusb, macOS
+via hidapi).
 
 Nothing device-specific is hardcoded. The GUI lets the user pick a HID device
 and press whatever button they want; learn_binding() watches the reports and
@@ -7,23 +8,117 @@ works out which byte/bit changed. That binding is stored in settings, and
 MicButtonReader replays it at runtime to fire press/release callbacks.
 """
 
+import sys
 import threading
 import time
+
+IS_MAC = sys.platform == "darwin"
 
 
 def _popcount(b):
     return bin(b).count("1")
 
 
+# ---------------------------------------------------------------------------
+# Backend: pywinusb on Windows; on macOS a small hidapi wrapper that mimics the
+# bits of pywinusb's HidDevice we use (open / set_raw_data_handler / close).
+# ---------------------------------------------------------------------------
+class _HidapiDevice:
+    """One HID interface opened through hidapi, read on a background thread."""
+
+    def __init__(self, info):
+        self._info = info
+        self.vendor_id = info.get("vendor_id")
+        self.product_id = info.get("product_id")
+        self.product_name = info.get("product_string") or ""
+        self.vendor_name = info.get("manufacturer_string") or ""
+        self.usage_page = info.get("usage_page")
+        self.usage = info.get("usage")
+        self._dev = None
+        self._handler = None
+        self._stop = threading.Event()
+        self._thread = None
+
+    def open(self):
+        import hid
+        d = hid.device()
+        d.open_path(self._info["path"])
+        self._dev = d
+        self._stop.clear()
+
+    def set_raw_data_handler(self, handler):
+        self._handler = handler
+        if self._thread is None and self._dev is not None:
+            self._thread = threading.Thread(target=self._read_loop, daemon=True)
+            self._thread.start()
+
+    def _read_loop(self):
+        while not self._stop.is_set():
+            try:
+                data = self._dev.read(64, 100)   # 100 ms timeout
+            except Exception as e:
+                if not self._stop.is_set():
+                    print(f"[hid] read failed: {e}")
+                return
+            if data and self._handler is not None:
+                try:
+                    self._handler(list(data))
+                except Exception as e:
+                    print(f"[hid] handler: {e}")
+
+    def close(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.5)
+            self._thread = None
+        if self._dev is not None:
+            try:
+                self._dev.close()
+            except Exception:
+                pass
+            self._dev = None
+
+
+def _iface_key(dev):
+    """Identifies one interface of a multi-interface device (macOS only)."""
+    up, u = getattr(dev, "usage_page", None), getattr(dev, "usage", None)
+    return None if up is None else f"{up:04x}:{u:04x}"
+
+
+def _get_devices(vid=None, pid=None):
+    """HID device objects (all, or those matching vid/pid). On macOS each
+    interface of a device is its own entry, like pywinusb's collections."""
+    if IS_MAC:
+        import hid
+        out = []
+        for info in hid.enumerate(vid or 0, pid or 0):
+            out.append(_HidapiDevice(info))
+        return out
+    from pywinusb import hid
+    if vid is None:
+        return hid.HidDeviceFilter().get_devices()
+    return hid.HidDeviceFilter(vendor_id=vid, product_id=pid).get_devices()
+
+
+def _backend_error():
+    try:
+        if IS_MAC:
+            import hid  # noqa: F401
+        else:
+            from pywinusb import hid  # noqa: F401
+        return None
+    except Exception as e:
+        return e
+
+
 def list_hid_devices():
     """Return [{vid, pid, product, vendor}] for all HID devices."""
-    try:
-        from pywinusb import hid
-    except Exception as e:
-        print(f"[hid] pywinusb unavailable: {e}")
+    err = _backend_error()
+    if err is not None:
+        print(f"[hid] HID backend unavailable: {err}")
         return []
     out, seen = [], set()
-    for d in hid.HidDeviceFilter().get_devices():
+    for d in _get_devices():
         key = (d.vendor_id, d.product_id, d.product_name)
         if key in seen:
             continue
@@ -55,15 +150,17 @@ class ButtonLearner:
                          daemon=True).start()
 
     def _run(self, vid, pid, window):
-        try:
-            from pywinusb import hid
-        except Exception as e:
-            print(f"[hid] {e}")
+        err = _backend_error()
+        if err is not None:
+            print(f"[hid] {err}")
             self.done.set()
             return
-        devs = hid.HidDeviceFilter(vendor_id=vid, product_id=pid).get_devices()
+        devs = _get_devices(vid, pid)
         if not devs:
             self.done.set()
+            return
+        if IS_MAC and len(devs) > 1:
+            self._run_multi(devs, window)
             return
         dev = devs[0]
         got = threading.Event()
@@ -90,6 +187,47 @@ class ButtonLearner:
             except Exception:
                 pass
         self.result = self._infer()
+        self.done.set()
+
+    def _run_multi(self, devs, window):
+        """macOS: a device's interfaces are separate entries and we can't tell
+        which one carries the buttons, so watch them all and bind to whichever
+        one changed. The interface is stored in the binding as "iface"."""
+        per = {}            # iface key -> list of reports
+        got = threading.Event()
+        opened = []
+
+        def make_handler(key):
+            def on_report(data):
+                rs = per.setdefault(key, [])
+                rs.append(bytes(data))
+                if len(set(rs)) >= 2:
+                    got.set()
+            return on_report
+
+        for dev in devs:
+            try:
+                dev.open()
+                dev.set_raw_data_handler(make_handler(_iface_key(dev)))
+                opened.append(dev)
+            except Exception as e:
+                print(f"[hid] could not open interface {_iface_key(dev)}: {e}")
+        try:
+            got.wait(timeout=window)
+            if got.is_set():
+                time.sleep(0.25)
+        finally:
+            for dev in opened:
+                dev.close()
+        for key, reports in per.items():
+            if len(set(reports)) >= 2:
+                self.reports = reports
+                res = self._infer()
+                if res is not None:
+                    if key is not None:
+                        res["iface"] = key
+                    self.result = res
+                    break
         self.done.set()
 
     def _infer(self):
@@ -193,18 +331,21 @@ class MicButtonReader:
                 self._action_down[idx] = False
 
     def start(self):
-        try:
-            from pywinusb import hid
-        except Exception as e:
-            print(f"[mic] pywinusb unavailable: {e}")
+        err = _backend_error()
+        if err is not None:
+            print(f"[mic] HID backend unavailable: {err}")
             return False
         if not self.binding:
             print("[mic] no button binding set")
             return False
-        devs = hid.HidDeviceFilter(vendor_id=self.vid, product_id=self.pid).get_devices()
+        devs = _get_devices(self.vid, self.pid)
         if not devs:
             print(f"[mic] device 0x{self.vid:04x}/0x{self.pid:04x} not found")
             return False
+        # macOS: pick the interface the button was learned on, if recorded.
+        want = self.binding.get("iface")
+        if want:
+            devs = [d for d in devs if _iface_key(d) == want] or devs
         self._dev = devs[0]
         try:
             self._dev.open()

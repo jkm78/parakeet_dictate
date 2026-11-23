@@ -2,7 +2,12 @@ onnx-asr>=0.11.0
 onnxruntime>=1.17
 sounddevice>=0.4.6
 numpy>=1.22
-keyboard>=0.13.5
 pyperclip>=1.8.2
-pywinusb>=0.4.2
 huggingface_hub>=0.20
+# Windows: global hotkey/typing + HID mic buttons
+keyboard>=0.13.5; sys_platform == "win32"
+pywinusb>=0.4.2; sys_platform == "win32"
+# macOS: Quartz event tap/injection (keys.py) + HID mic buttons
+pyobjc-framework-Quartz>=9.0; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=9.0; sys_platform == "darwin"
+hidapi>=0.14; sys_platform == "darwin"

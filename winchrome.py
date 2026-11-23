@@ -1,12 +1,31 @@
 """
-Small Windows theming helpers for a standard (decorated) Tk window:
-detect the Windows light/dark app theme and paint the native title bar to match.
+Small theming helpers for a standard (decorated) Tk window: detect the OS
+light/dark app theme, paint the native Windows title bar to match, and pick
+platform-native fonts.
 
-Everything is best-effort and Windows-only: each function is a no-op (returning
-False) elsewhere or if a Win32 call fails.
+Title-bar painting is Windows-only (macOS's Aqua title bar already follows the
+system appearance): it is a no-op (returning False) elsewhere or if a Win32
+call fails. Dark-mode detection and fonts work on Windows and macOS.
 """
 
 import sys
+
+IS_MAC = sys.platform == "darwin"
+
+# Native UI / monospace font families. Tk on macOS renders point sizes at
+# 72 dpi, so Windows-sized fonts look tiny there; FONT_SCALE compensates.
+UI_FAMILY = "Helvetica Neue" if IS_MAC else "Segoe UI"
+MONO_FAMILY = "Menlo" if IS_MAC else "Consolas"
+FONT_SCALE = 1.3 if IS_MAC else 1.0
+
+
+def ui_font(size, *style):
+    """A (family, size, *style) font tuple in the platform's UI font."""
+    return (UI_FAMILY, round(size * FONT_SCALE)) + style
+
+
+def mono_font(size):
+    return (MONO_FAMILY, round(size * FONT_SCALE))
 
 try:
     import ctypes
@@ -82,7 +101,17 @@ def set_titlebar_theme(root, dark):
 
 
 def is_dark_mode():
-    """True if Windows apps are set to the dark theme (registry-based)."""
+    """True if the OS is set to the dark theme (Windows registry / macOS
+    AppleInterfaceStyle)."""
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=2).stdout
+            return "dark" in out.lower()
+        except Exception:
+            return False
     try:
         import winreg
         k = winreg.OpenKey(

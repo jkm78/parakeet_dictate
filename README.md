@@ -1,6 +1,6 @@
 # Parakeet Dictate
 
-**Fully local, HIPAA-friendly voice-to-text for Windows — an open-source
+**Fully local, HIPAA-friendly voice-to-text for Windows and macOS — an open-source
 alternative to Dragon.** Push a key (or your dictation mic's button), speak, and
 the transcript appears at your cursor in any application. No cloud, no GPU, no
 audio or text ever leaves the machine.
@@ -101,6 +101,39 @@ needs no internet at all. Pass `-NoModel` for a lean ~50 MB zip whose exe
 downloads the model on first run. `-Build` rebuilds the exe first; omit it to
 package the existing `dist\ParakeetDictate.exe`.
 
+## Getting the Mac app
+
+Build it on a Mac (Intel or Apple Silicon — it builds for the machine it runs
+on). Apple's bundled Python has a too-old Tk, so the script uses
+[uv](https://docs.astral.sh/uv/) to fetch a standalone Python 3.12 (no admin
+rights needed):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+./build_mac.sh
+```
+
+Output: `dist/ParakeetDictate.app` and `dist/ParakeetDictate-v<ver>-mac-<arch>.zip`.
+(Prefer python.org/Homebrew Python? `PYTHON=/path/to/python3.12 ./build_mac.sh`.)
+
+**Permissions (first launch).** macOS asks for three, all in *System Settings →
+Privacy & Security*:
+
+| Permission | Needed for |
+|---|---|
+| Microphone | recording your voice |
+| Input Monitoring | the global hotkey (Relaunch the app after granting) |
+| Accessibility | typing / pasting the transcript into other apps |
+
+The default hotkey on macOS is **right Option** (MacBooks have no right Ctrl);
+change it under *Edit settings → Input*. Paste mode uses Cmd+V. Logs go to
+`~/Library/Logs/ParakeetDictate/`.
+
+> The app is ad-hoc signed, not notarized. On another Mac, right-click →
+> **Open** the first time. Each rebuild has a new signature, so macOS may ask
+> for Input Monitoring / Accessibility again — remove the old entry and re-add
+> the app if the toggle looks on but the hotkey does nothing.
+
 ## Making it *fully* offline (no first-run download)
 
 For a locked-down clinical fleet, bundle the model so the exe never contacts
@@ -138,9 +171,12 @@ This yields a ~700 MB+ exe that needs zero network on any machine.
 | `vad.py` | Silero VAD (ONNX) + segmenter for continuous dictation |
 | `settings.py` | Roaming JSON settings in the user's Documents folder |
 | `settings_gui.py` | Tkinter settings editor |
-| `mic_hid.py` | Generic HID button learning/reading (no device hardcoded) |
+| `mic_hid.py` | Generic HID button learning/reading (no device hardcoded; pywinusb on Windows, hidapi on macOS) |
+| `keys.py` | Hotkey listening + text injection (`keyboard` lib on Windows, native Quartz on macOS) |
+| `winchrome.py` | Light/dark detection, Windows title-bar theming, platform fonts |
 | `test_formatting.py`, `test_vad.py` | Pure-Python self-tests (run on any OS) |
 | `build.bat` | Windows single-exe build |
+| `build_mac.sh` | macOS `.app` build |
 | `.github/workflows/build-windows.yml` | Automated Windows build + release |
 
 ## Roadmap

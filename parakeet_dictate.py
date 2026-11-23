@@ -1,5 +1,5 @@
 """
-Parakeet Dictate - local, CPU-only dictation for Windows.
+Parakeet Dictate - local, CPU-only dictation for Windows and macOS.
 
 Trigger (keyboard hotkey or a mic button that sends a keystroke) -> speak ->
 release/toggle -> Parakeet TDT 0.6B (INT8 ONNX) transcribes on-device -> text
@@ -155,11 +155,14 @@ def _setup_logging():
     """Tee stdout/stderr to a log file and an in-memory buffer. Must run before
     anything else prints. Returns the log file path (or None)."""
     global _log_path
-    base = (os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP")
-            or os.path.expanduser("~"))
+    if sys.platform == "darwin":
+        d = Path.home() / "Library" / "Logs" / "ParakeetDictate"
+    else:
+        base = (os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP")
+                or os.path.expanduser("~"))
+        d = Path(base) / "ParakeetDictate" / "logs"
     fh = None
     try:
-        d = Path(base) / "ParakeetDictate" / "logs"
         d.mkdir(parents=True, exist_ok=True)
         _log_path = d / "parakeet_dictate.log"
         fh = open(_log_path, "a", encoding="utf-8", buffering=1)
@@ -435,7 +438,7 @@ def inject(text):
     try:
         pyperclip.copy(text)
         time.sleep(0.03)
-        keyboard.send("ctrl+v")
+        keyboard.paste()   # Ctrl+V on Windows, Cmd+V on macOS
         time.sleep(0.05)
     finally:
         if saved is not None:
@@ -507,11 +510,11 @@ def install_input():
         print("[input] mic unavailable; falling back to keyboard hotkey")
         _mic_reader = None
 
-    key = inp.get("hotkey", "right ctrl")
+    key = keyboard.normalize(inp.get("hotkey", keyboard.DEFAULT_HOTKEY))
 
     def handler(event):
         global _key_is_down
-        if event.name != key:
+        if keyboard.normalize(event.name) != key:
             return
         if event.event_type == keyboard.KEY_DOWN:
             if not _key_is_down:
@@ -521,7 +524,13 @@ def install_input():
             _key_is_down = False
             _trigger_release()
 
-    _input_hook = keyboard.hook(handler)
+    try:
+        _input_hook = keyboard.hook(handler)
+    except Exception as e:
+        # macOS: no Input Monitoring permission yet -> no global hotkey.
+        print(f"[input] keyboard hook failed: {e}", file=sys.stderr)
+        _active_input = f'key: {key}  -  NOT ACTIVE: {e}'
+        return
     # Reflect what is ACTUALLY active, incl. a fallback when the mic is unplugged.
     _active_input = f'{behavior}  -  key: {key}'
     if mic_wanted:
@@ -752,11 +761,17 @@ def _startup():
         _set_status("Loading components...")
         _log("startup: importing numpy"); import numpy as _np; np = _np
         _log("startup: importing sounddevice"); import sounddevice as _sd; sd = _sd
-        _log("startup: importing keyboard"); import keyboard as _kb; keyboard = _kb
+        _log("startup: importing keyboard"); import keys as _kb; keyboard = _kb
         _log("startup: importing pyperclip"); import pyperclip as _pc; pyperclip = _pc
         _set_status("Starting audio...")
         _log("startup: opening audio stream")
         _start_stream()
+        if sys.platform == "darwin":
+            # Show the macOS Input Monitoring / Accessibility prompts up front
+            # (hotkey + typing silently do nothing without them).
+            ok = keyboard.request_permissions()
+            missing = keyboard.permission_problems()
+            _log(f"startup: macOS permissions ok={ok} missing={missing}")
         _log("startup: installing input hook")
         install_input()
         # continuous-dictation plumbing (idle until a hold uses continuous mode):
@@ -789,18 +804,21 @@ def _shutdown_stream():
 
 
 def _setup_fonts():
-    """Use Segoe UI at standard Windows sizes for every default (named) font, so
-    ttk widgets, the loading view, and the Settings window all read at a normal
-    Windows size instead of the theme's smaller default."""
+    """Use the platform UI font (Segoe UI on Windows, Helvetica Neue on macOS) at
+    standard sizes for every default (named) font, so ttk widgets, the loading
+    view, and the Settings window all read at a normal size instead of the
+    theme's smaller default."""
     import tkinter.font as tkfont
     for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont",
                  "TkHeadingFont", "TkTooltipFont"):
         try:
-            tkfont.nametofont(name).configure(family="Segoe UI", size=10)
+            fam, size = winchrome.ui_font(10)
+            tkfont.nametofont(name).configure(family=fam, size=size)
         except Exception:
             pass
     try:
-        tkfont.nametofont("TkFixedFont").configure(family="Consolas", size=9)
+        fam, size = winchrome.mono_font(9)
+        tkfont.nametofont("TkFixedFont").configure(family=fam, size=size)
     except Exception:
         pass
 
@@ -892,7 +910,7 @@ def main():
 
     dark = winchrome.is_dark_mode()
     _PAL = _palette(dark)
-    _setup_fonts()               # standard Windows (Segoe UI) font sizes
+    _setup_fonts()               # platform UI font at standard sizes
     _setup_theme_style(dark)
     root.configure(bg=_PAL["body"])
     root.update_idletasks()
@@ -907,7 +925,7 @@ def main():
     loading = ttk.Frame(body)
     loading.pack(fill="both", expand=True)
     ttk.Label(loading, text="Loading Parakeet Dictate",
-              font=("Segoe UI", 14)).pack(pady=(18, 6))
+              font=winchrome.ui_font(14)).pack(pady=(18, 6))
     load_msg = ttk.Label(loading, foreground=_PAL["text2"], text="Please stand by...")
     load_msg.pack()
     bar = ttk.Progressbar(loading, mode="indeterminate", length=240)
@@ -918,13 +936,13 @@ def main():
     # console (the windowed exe has none). Also written to the log file.
     logframe = ttk.Frame(loading)
     logframe.pack(fill="both", expand=True, padx=10, pady=(4, 8))
-    logbox = tk.Text(logframe, height=10, wrap="none", font=("Consolas", 9),
+    logbox = tk.Text(logframe, height=10, wrap="none", font=winchrome.mono_font(9),
                      background="#111", foreground="#ddd", borderwidth=0)
     sb = ttk.Scrollbar(logframe, command=logbox.yview)
     logbox.configure(yscrollcommand=sb.set, state="disabled")
     sb.pack(side="right", fill="y")
     logbox.pack(side="left", fill="both", expand=True)
-    ttk.Label(loading, foreground=_PAL["text3"], font=("Segoe UI", 9),
+    ttk.Label(loading, foreground=_PAL["text3"], font=winchrome.ui_font(9),
               text=f"Log: {_log_path}").pack(pady=(0, 6))
 
     status_var = tk.StringVar(value="Starting...")
@@ -998,10 +1016,10 @@ def build_main_view(body):
                                             fill=STATUS_COLORS["off"], outline="")
     _light_canvas.pack(side="left", padx=(0, 10))
     tk.Label(statusrow, textvariable=status_var, bg=p["body"], fg=p["text"],
-             font=("Segoe UI", 15)).pack(side="left")
+             font=winchrome.ui_font(15)).pack(side="left")
 
     hint = tk.Label(frame, bg=p["body"], fg=p["text2"], text="",
-                    font=("Segoe UI", 10))
+                    font=winchrome.ui_font(10))
     hint.pack()
 
     # Legend so the colors are self-explanatory (each bullet in its own color).
@@ -1011,9 +1029,9 @@ def build_main_view(body):
                        ("dictating", "dictating"),
                        ("off", "off")):
         tk.Label(legend, text="●", fg=STATUS_COLORS[key], bg=p["body"],
-                 font=("Segoe UI", 12)).pack(side="left", padx=(8, 2))
+                 font=winchrome.ui_font(12)).pack(side="left", padx=(8, 2))
         tk.Label(legend, text=label, fg=p["text3"], bg=p["body"],
-                 font=("Segoe UI", 10)).pack(side="left")
+                 font=winchrome.ui_font(10)).pack(side="left")
 
     def open_settings():
         from settings_gui import SettingsWindow
@@ -1023,7 +1041,7 @@ def build_main_view(body):
                     bg=p["btn"], fg=p["text"], activebackground=p["btn_hover"],
                     activeforeground=p["text"], relief="flat", bd=0,
                     highlightthickness=1, highlightbackground=p["btn_border"],
-                    highlightcolor=p["btn_border"], font=("Segoe UI", 10),
+                    highlightcolor=p["btn_border"], font=winchrome.ui_font(10),
                     padx=18, pady=6, cursor="hand2")
     btn.pack(pady=16)
     btn.bind("<Enter>", lambda e: btn.config(bg=p["btn_hover"]))
