@@ -78,7 +78,16 @@ PLIST="dist/$APP.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :NSRequiresAquaSystemAppearance bool false" "$PLIST" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 11.0" "$PLIST" 2>/dev/null || true
+# Minimum macOS = the newest "minos" of any bundled binary (onnxruntime's
+# wheel is usually the strictest), so older Macs get a clear "requires macOS X"
+# message instead of a crash at model load.
+MINOS=$(find "dist/$APP.app" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 \
+  | xargs -0 -n1 vtool -show-build 2>/dev/null | awk '/minos/{print $2}' \
+  | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+MINOS=${MINOS:-11.0}
+echo "[plist] LSMinimumSystemVersion = $MINOS"
+/usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $MINOS" "$PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MINOS" "$PLIST"
 
 # 4b) Sign with a stable local certificate (see mac_signing.sh) so macOS keeps
 #     the Input Monitoring / Accessibility grants across rebuilds. Falls back
