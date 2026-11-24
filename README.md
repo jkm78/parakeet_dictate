@@ -54,8 +54,12 @@ Put your cursor in any text field, **hold Right Ctrl**, speak, release. The
 transcript pastes at the cursor. Open **Edit Settings** to change the trigger,
 microphone, macros, and formatting.
 
-> **First run downloads ~640 MB** (the INT8 model) from Hugging Face to
-> `%USERPROFILE%\.cache\huggingface`. After that it is fully offline. The
+> **First run downloads ~640 MB** (the INT8 model) from Hugging Face. On
+> Windows it is cached on **local disk** — `%ProgramData%\ParakeetDictate\models`
+> (one copy shared by every user on the PC), falling back to
+> `%LOCALAPPDATA%\ParakeetDictate\models` when ProgramData isn't writable — so
+> it never loads over a roaming / folder-redirected profile. (Set
+> `PARAKEET_MODEL_DIR` to override.) After that it is fully offline. The
 > download is model weights — never patient data.
 
 ## Getting the .exe
