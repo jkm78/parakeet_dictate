@@ -584,17 +584,34 @@ def _install_hf_download_progress():
     _hf_tqdm_mod.tqdm = _ReportingTqdm
 
 
-def _shared_models_dir():
-    """Machine-wide model cache shared by all users on this PC. On Windows this
-    is %ProgramData%\\ParakeetDictate\\models (readable by every account); other
-    platforms keep the per-user cache. An explicit PARAKEET_MODEL_DIR wins."""
+def _candidate_model_dirs():
+    """Model-cache locations to try, in priority order. All are on LOCAL,
+    non-roaming disk so the ~640 MB model never loads over a network / roaming
+    profile. An explicit PARAKEET_MODEL_DIR wins outright.
+
+    Windows:
+      1) %ProgramData%\\ParakeetDictate\\models  -- machine-wide: one download
+         shared by every user on the PC (used when it is writable).
+      2) %LOCALAPPDATA%\\ParakeetDictate\\models -- per-user, always writable and
+         explicitly excluded from roaming. The local fallback when ProgramData
+         is locked down, so we never drop back to the per-user HOME cache
+         (%USERPROFILE%\\.cache), which on a roaming/redirected profile lives on
+         a slow network share.
+    Other platforms return [] -- Hugging Face's default per-user cache is already
+    on local disk there.
+    """
     override = os.environ.get("PARAKEET_MODEL_DIR")
     if override:
-        return Path(override)
+        return [Path(override)]
+    dirs = []
     if sys.platform.startswith("win"):
-        pd = os.environ.get("ProgramData") or r"C:\ProgramData"
-        return Path(pd) / "ParakeetDictate" / "models"
-    return None
+        pd = os.environ.get("ProgramData")
+        if pd:
+            dirs.append(Path(pd) / "ParakeetDictate" / "models")
+        la = os.environ.get("LOCALAPPDATA")
+        if la:
+            dirs.append(Path(la) / "ParakeetDictate" / "models")
+    return dirs
 
 
 def _writable(path):
@@ -615,31 +632,41 @@ def _hf_model_cached(hf_home):
     return snaps.is_dir() and any(snaps.iterdir())
 
 
-def _configure_shared_cache():
-    """Point the speech model (HF) and VAD caches at the shared machine-wide
-    folder so every user on a PC shares one ~670 MB download. Must run before
-    huggingface_hub is imported (HF_HOME is read at its import). Degrades to the
-    per-user cache if the shared folder can't be used."""
-    base = _shared_models_dir()
-    if base is None:
-        return
-    hf_home = base / "huggingface"
-    writable = _writable(hf_home)
-    cached = _hf_model_cached(hf_home)
-    if not writable and not cached:
-        # Can't write and nothing is there yet (e.g. a locked-down account before
-        # anyone has seeded it) -> leave the per-user cache in place.
-        print(f"[cache] shared cache {base} not writable and empty; "
-              "using per-user cache", file=sys.stderr)
-        return
-    os.environ["HF_HOME"] = str(hf_home)
+def _apply_cache(base, writable, cached):
+    """Point the speech-model (HF) and VAD caches at `base`."""
+    os.environ["HF_HOME"] = str(base / "huggingface")
     os.environ["PARAKEET_MODEL_DIR"] = str(base)  # picked up by vad.py
     if cached and not writable:
-        # A later user with read-only access to the first user's download: load
-        # straight from the cache without any network/lock writes.
+        # Read-only access to a copy someone else seeded (e.g. the shared
+        # ProgramData cache): load straight from it with no network/lock writes.
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    print(f"[cache] shared model cache: {base}  "
-          f"(writable={writable}, cached={cached})", file=sys.stderr)
+    print(f"[cache] model cache: {base}  (writable={writable}, cached={cached})",
+          file=sys.stderr)
+
+
+def _configure_shared_cache():
+    """Point the speech-model (HF) and VAD caches at a LOCAL folder before
+    huggingface_hub is imported (HF_HOME is read at its import), so the model
+    never loads over a roaming / network profile. Prefer a machine-wide shared
+    copy, then a per-user local copy; fall back to the default per-user cache
+    only if no local folder is usable at all."""
+    cands = _candidate_model_dirs()
+    if not cands:
+        return   # non-Windows: HF's default per-user cache is already local
+    # 1) Reuse an existing download, preferring the shared (first) location.
+    for base in cands:
+        if _hf_model_cached(base / "huggingface"):
+            _apply_cache(base, writable=_writable(base / "huggingface"), cached=True)
+            return
+    # 2) Nothing cached yet: download into the first writable location
+    #    (ProgramData if allowed -> shared; else LocalAppData -> per-user, local).
+    for base in cands:
+        if _writable(base / "huggingface"):
+            _apply_cache(base, writable=True, cached=False)
+            return
+    # 3) No local folder usable at all (very unusual): leave the HF default cache.
+    print("[cache] no writable local model dir; using the default per-user cache",
+          file=sys.stderr)
 
 
 def load_model_bg():
