@@ -9,6 +9,7 @@ Sections:
   - Macros: spoken phrase -> injected text (paragraph templates, shortcuts).
 """
 
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -34,7 +35,7 @@ class SettingsWindow(tk.Toplevel):
         self.withdraw()
         self.configure(bg=_BODY_BG)   # else the Toplevel bg shows as a light border
         self.title("Parakeet Dictate - Settings")
-        self.geometry("640x620")
+        self.geometry("760x720" if sys.platform == "darwin" else "640x620")
         self.data = data
         self.on_save = on_save
         self._capture_hook = None
@@ -42,6 +43,15 @@ class SettingsWindow(tk.Toplevel):
         # focused so it's never hidden behind the pinned window.
         self.transient(master)
         self.attributes("-topmost", True)
+
+        # Pack the button bar FIRST at the bottom so it always keeps its full
+        # height; the notebook then takes whatever space is left. (Packed last,
+        # the bar was squeezed and its button text clipped on macOS, whose
+        # larger fonts make the tabs taller.)
+        bar = ttk.Frame(self)
+        bar.pack(side="bottom", fill="x", padx=8, pady=(0, 8))
+        ttk.Button(bar, text="Save", command=self._save).pack(side="right")
+        ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right", padx=6)
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
@@ -57,11 +67,6 @@ class SettingsWindow(tk.Toplevel):
         self._build_list_tab(nb, "Ignore if alone", "ignore_if_only",
                              "One word/phrase per line. Dropped only when it is "
                              "the ENTIRE utterance.")
-
-        bar = ttk.Frame(self)
-        bar.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Button(bar, text="Save", command=self._save).pack(side="right")
-        ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right", padx=6)
 
         # Theme the native title bar to the Windows dark/light setting, then show.
         self.update_idletasks()

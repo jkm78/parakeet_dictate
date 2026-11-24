@@ -1057,12 +1057,25 @@ def build_main_view(body):
         from settings_gui import SettingsWindow
         SettingsWindow(root, SETTINGS, on_settings_saved)
 
-    btn = tk.Button(frame, text="Edit settings", command=open_settings,
-                    bg=p["btn"], fg=p["text"], activebackground=p["btn_hover"],
-                    activeforeground=p["text"], relief="flat", bd=0,
-                    highlightthickness=1, highlightbackground=p["btn_border"],
-                    highlightcolor=p["btn_border"], font=winchrome.ui_font(10),
-                    padx=18, pady=6, cursor="hand2")
+    if sys.platform == "darwin":
+        # macOS's native tk.Button ignores bg (Aqua paints it white when the
+        # window is active) but honors fg, so light-on-dark text turns
+        # white-on-white. A Label styled and bound like a button looks the same
+        # as the Windows button in both themes.
+        btn = tk.Label(frame, text="Edit settings", bg=p["btn"], fg=p["text"],
+                       highlightthickness=1, highlightbackground=p["btn_border"],
+                       highlightcolor=p["btn_border"], font=winchrome.ui_font(10),
+                       padx=18, pady=6, cursor="pointinghand")
+        btn.bind("<ButtonPress-1>", lambda e: btn.config(bg=p["btn_border"]))
+        btn.bind("<ButtonRelease-1>", lambda e: (btn.config(bg=p["btn_hover"]),
+                                                 open_settings()))
+    else:
+        btn = tk.Button(frame, text="Edit settings", command=open_settings,
+                        bg=p["btn"], fg=p["text"], activebackground=p["btn_hover"],
+                        activeforeground=p["text"], relief="flat", bd=0,
+                        highlightthickness=1, highlightbackground=p["btn_border"],
+                        highlightcolor=p["btn_border"], font=winchrome.ui_font(10),
+                        padx=18, pady=6, cursor="hand2")
     btn.pack(pady=16)
     btn.bind("<Enter>", lambda e: btn.config(bg=p["btn_hover"]))
     btn.bind("<Leave>", lambda e: btn.config(bg=p["btn"]))
